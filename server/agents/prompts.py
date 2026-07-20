@@ -64,6 +64,8 @@ SEARCH_AGENT_PROMPT = """You are a research strategist. Given a topic, generate
 
         If critic feedback is provided, address it by refining or adding queries.
 
+        If the query is a greeting, small talk, or a question about what you can do → route = "direct"
+
         You MUST respond ONLY with a JSON object matching this schema:
         {
           "queries": ["query 1", "query 2", ...],
@@ -74,7 +76,7 @@ SEARCH_AGENT_PROMPT = """You are a research strategist. Given a topic, generate
 CRITIC_PROMPT = """You are a research quality assessor. 
         Evaluate whether the provided sources are sufficient to write a comprehensive report on the topic.
         Consider: coverage breadth, source credibility, data freshness, and topic relevance.
-        Be strict — a quality score below 0.6 should fail.
+        Be strict — a quality score below 0.4 should fail.
 
         You MUST respond ONLY with a JSON object matching this schema:
         {

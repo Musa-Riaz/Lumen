@@ -2,22 +2,41 @@ import os
 import uuid
 import json
 import asyncio
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from dotenv import load_dotenv
+
 from graph.state import AgentState
 from graph.graph import get_checkpointed_graph
 from agents.writer_agent import stream_writer_agent
+from api.db import open_pool, close_pool, get_conn, init_db
 
 load_dotenv()
 
-app = FastAPI(title="Lumen API")
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "dev-secret-key")
+
+# ---------------------------------------------------------------------------
+# Lifespan – runs on startup / shutdown
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await open_pool()
+    await init_db()
+    yield
+    await close_pool()
+
+
+app = FastAPI(title="Lumen API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,12 +44,22 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Request schema
+# Internal-key guard
+# ---------------------------------------------------------------------------
+
+async def verify_internal_key(x_lumen_internal_key: str = Header(...)):
+    if x_lumen_internal_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
+
+
+# ---------------------------------------------------------------------------
+# Request / Response schemas
 # ---------------------------------------------------------------------------
 
 class ResearchRequest(BaseModel):
     topic: str
-    session_id: str | None = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
     """
     Optional session identifier.
 
@@ -44,36 +73,125 @@ class ResearchRequest(BaseModel):
     """
 
 
+class UserSyncRequest(BaseModel):
+    id: str           # Clerk user ID
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+class CreateSessionRequest(BaseModel):
+    user_id: str
+    title: Optional[str] = "New Research Session"
+    topic: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# User sync endpoint – called by the Next.js API route on sign-in
+# ---------------------------------------------------------------------------
+
+@app.post("/users/sync", dependencies=[Depends(verify_internal_key)])
+async def sync_user(body: UserSyncRequest):
+    """
+    Upsert a Clerk user into the local `users` table.
+    Called server-side from Next.js after every sign-in.
+    """
+    async with get_conn() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (id, email, first_name, last_name, image_url)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE
+                SET email      = EXCLUDED.email,
+                    first_name = EXCLUDED.first_name,
+                    last_name  = EXCLUDED.last_name,
+                    image_url  = EXCLUDED.image_url
+            """,
+            (body.id, body.email, body.first_name, body.last_name, body.image_url),
+        )
+        await conn.commit()
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Session endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/sessions", dependencies=[Depends(verify_internal_key)])
+async def list_sessions(user_id: str):
+    """Return all sessions for a given user, ordered by creation time desc."""
+    async with get_conn() as conn:
+        rows = await conn.execute(
+            "SELECT id, user_id, title, topic, created_at FROM sessions WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,),
+        )
+        sessions = []
+        async for row in rows:
+            sessions.append({
+                "id": str(row[0]),
+                "user_id": row[1],
+                "title": row[2],
+                "topic": row[3],
+                "created_at": row[4].isoformat() if row[4] else None,
+            })
+    return {"sessions": sessions}
+
+
+@app.post("/sessions", dependencies=[Depends(verify_internal_key)])
+async def create_session(body: CreateSessionRequest):
+    """Create a new session row and return its UUID."""
+    session_id = str(uuid.uuid4())
+    async with get_conn() as conn:
+        await conn.execute(
+            "INSERT INTO sessions (id, user_id, title, topic) VALUES (%s, %s, %s, %s)",
+            (session_id, body.user_id, body.title, body.topic),
+        )
+        await conn.commit()
+    return {"session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Messages endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/sessions/{session_id}/messages", dependencies=[Depends(verify_internal_key)])
+async def get_messages(session_id: str):
+    """Return all messages for a session in chronological order."""
+    async with get_conn() as conn:
+        rows = await conn.execute(
+            "SELECT id, session_id, role, content, citations, created_at FROM messages WHERE session_id = %s ORDER BY created_at ASC",
+            (session_id,),
+        )
+        messages = []
+        async for row in rows:
+            messages.append({
+                "id": str(row[0]),
+                "session_id": str(row[1]),
+                "role": row[2],
+                "content": row[3],
+                "citations": row[4] if row[4] else [],
+                "created_at": row[5].isoformat() if row[5] else None,
+            })
+    return {"messages": messages}
+
+
 # ---------------------------------------------------------------------------
 # Streaming research endpoint
 # ---------------------------------------------------------------------------
 
 @app.post("/research/stream")
-async def stream_research(request: ResearchRequest):
-    """
-    Streams a full research pipeline as Server-Sent Events.
+async def stream_research(
+    request: ResearchRequest,
+    x_lumen_internal_key: str = Header(...),
+):
+    if x_lumen_internal_key != INTERNAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
 
-    Session / checkpointing
-    -----------------------
-    Every run is tied to a thread_id (= session_id) which is stored as a
-    LangGraph checkpoint in Neon.  The client can replay or resume any
-    previous session by sending its session_id.
-
-    SSE event types emitted:
-      • session   → { session_id: str }        — sent first so client can store it
-      • progress  → { message: str }           — pipeline status updates
-      • token     → { token: str }             — individual LLM output tokens
-      • done      → { status, citations[] }    — signals completion with sources
-      • error     → { message: str }           — unhandled exceptions
-    """
     async def event_generator():
 
         # ------------------------------------------------------------------ #
         # Session ID                                                          #
-        #                                                                     #
-        # Use the client-supplied ID or generate a new UUID.                 #
-        # Emit it immediately so the frontend can persist it (e.g. in        #
-        # localStorage) before any work starts.                               #
         # ------------------------------------------------------------------ #
         session_id = request.session_id or str(uuid.uuid4())
         yield {
@@ -82,8 +200,20 @@ async def stream_research(request: ResearchRequest):
         }
         await asyncio.sleep(0)
 
+        # If we have a user_id, ensure the session row exists              #
+        if request.user_id:
+            async with get_conn() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO sessions (id, user_id, title, topic)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (session_id, request.user_id, request.topic[:80] if request.topic else "New Session", request.topic),
+                )
+                await conn.commit()
+
         # LangGraph uses this config dict to key every checkpoint.
-        # thread_id is the only required field for the Postgres checkpointer.
         langgraph_config = {"configurable": {"thread_id": session_id}}
 
         # Build the initial state for the graph
@@ -103,41 +233,23 @@ async def stream_research(request: ResearchRequest):
             error=None,
         )
 
-        # Track which progress messages have already been emitted so we
-        # never send a duplicate during a retry loop.
         seen_messages: set[str] = set()
-
-        # Accumulate scraped_sources across all node outputs so we have the
-        # full list ready for the writer after the graph ends.
         accumulated_sources: list = []
 
         try:
             # -------------------------------------------------------------- #
             # PHASE 1: Run the LangGraph pipeline with checkpointing          #
-            #                                                                 #
-            # get_checkpointed_graph() is an async context manager that:      #
-            #   1. Opens an async psycopg3 pool to Neon                       #
-            #   2. Runs checkpointer.setup() (creates tables if needed)       #
-            #   3. Compiles the graph with AsyncPostgresSaver attached         #
-            #   4. Yields the compiled graph                                  #
-            #   5. Closes the pool when the `async with` block exits          #
-            #                                                                 #
-            # Passing langgraph_config to astream() tells the checkpointer   #
-            # which thread (session) to read/write state for.                 #
             # -------------------------------------------------------------- #
             async with get_checkpointed_graph() as graph:
                 async for state_snapshot in graph.astream(initial_state, config=langgraph_config):
-                    # state_snapshot → { node_name: partial_state_dict }
                     for node_name, node_output in state_snapshot.items():
                         if not isinstance(node_output, dict):
                             continue
 
-                        # Merge scraped sources from each node into our list
                         new_sources = node_output.get("scraped_sources", [])
                         if new_sources:
                             accumulated_sources.extend(new_sources)
 
-                        # Emit new progress messages as they arrive
                         for msg in node_output.get("progress_messages", []):
                             if msg not in seen_messages:
                                 seen_messages.add(msg)
@@ -145,15 +257,10 @@ async def stream_research(request: ResearchRequest):
                                     "event": "progress",
                                     "data": json.dumps({"message": msg}),
                                 }
-                                # Flush to client immediately
                                 await asyncio.sleep(0)
 
             # -------------------------------------------------------------- #
             # PHASE 2: Stream the writer's output token by token              #
-            #                                                                 #
-            # The graph has now ended (critic passed or max retries hit).     #
-            # We call stream_writer_agent() which uses plain .astream() on    #
-            # the LLM — no structured output, so each token arrives directly. #
             # -------------------------------------------------------------- #
 
             yield {
@@ -178,22 +285,33 @@ async def stream_research(request: ResearchRequest):
                 error=None,
             )
 
+            final_report_tokens: list[str] = []
             final_citations: list = []
             async for token, citations in stream_writer_agent(writer_state):
-                # citations is the same list on every iteration; grab last ref
                 final_citations = citations
+                final_report_tokens.append(token)
                 yield {
                     "event": "token",
                     "data": json.dumps({"token": token}),
                 }
-                # Yield control after every token so the event loop can push
-                # the chunk without waiting for the next one.
                 await asyncio.sleep(0)
 
             # -------------------------------------------------------------- #
-            # Signal completion — include citations so the frontend can        #
-            # render clickable source links below the report.                  #
+            # Persist user + assistant messages to DB                         #
             # -------------------------------------------------------------- #
+            if request.user_id:
+                final_report_text = "".join(final_report_tokens)
+                async with get_conn() as conn:
+                    await conn.execute(
+                        "INSERT INTO messages (session_id, role, content, citations) VALUES (%s, %s, %s, %s)",
+                        (session_id, "user", request.topic, json.dumps([])),
+                    )
+                    await conn.execute(
+                        "INSERT INTO messages (session_id, role, content, citations) VALUES (%s, %s, %s, %s)",
+                        (session_id, "assistant", final_report_text, json.dumps(final_citations)),
+                    )
+                    await conn.commit()
+
             yield {
                 "event": "done",
                 "data": json.dumps({
@@ -203,8 +321,6 @@ async def stream_research(request: ResearchRequest):
             }
 
         except Exception as e:
-            # Structured error event so the frontend can display a message
-            # rather than silently dying on a broken stream.
             yield {
                 "event": "error",
                 "data": json.dumps({"message": str(e)}),

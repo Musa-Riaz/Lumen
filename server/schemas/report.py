@@ -1,8 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List
 
-#TODO: Make a citiations class
-
 class SearchPlan(BaseModel):
     """Output of the search agent: a set of targetted web queries"""
     queries: List[str] = Field(
@@ -40,4 +38,3 @@ class ResearchReport(BaseModel):
     sections: List[ReportSection]
     key_takeaways: List[str] = Field(description="3-5 bullet point takeaways.")
     limitations: str = Field(description="What this report coudln't cover and why.")
-    #TODO: Make a citiations class
