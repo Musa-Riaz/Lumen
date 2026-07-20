@@ -5,6 +5,8 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
+from loguru import logger
+
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,6 +17,8 @@ from graph.state import AgentState
 from graph.graph import get_checkpointed_graph
 from agents.writer_agent import stream_writer_agent
 from api.db import open_pool, close_pool, get_conn, init_db
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
 
@@ -151,6 +155,34 @@ async def create_session(body: CreateSessionRequest):
     return {"session_id": session_id}
 
 
+class UpdateSessionRequest(BaseModel):
+    title: str
+
+
+@app.patch("/sessions/{session_id}", dependencies=[Depends(verify_internal_key)])
+async def update_session(session_id: str, body: UpdateSessionRequest):
+    """Update active session title name."""
+    async with get_conn() as conn:
+        await conn.execute(
+            "UPDATE sessions SET title = %s WHERE id = %s",
+            (body.title, session_id),
+        )
+        await conn.commit()
+    return {"status": "ok"}
+
+
+@app.delete("/sessions/{session_id}", dependencies=[Depends(verify_internal_key)])
+async def delete_session(session_id: str):
+    """Delete a session (foreign keys ON DELETE CASCADE clean up messages automatically)."""
+    async with get_conn() as conn:
+        await conn.execute(
+            "DELETE FROM sessions WHERE id = %s",
+            (session_id,),
+        )
+        await conn.commit()
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Messages endpoint
 # ---------------------------------------------------------------------------
@@ -238,63 +270,122 @@ async def stream_research(
 
         try:
             # -------------------------------------------------------------- #
-            # PHASE 1: Run the LangGraph pipeline with checkpointing          #
+            # Classifier: Bypasses Graph for greetings & conversation        #
             # -------------------------------------------------------------- #
-            async with get_checkpointed_graph() as graph:
-                async for state_snapshot in graph.astream(initial_state, config=langgraph_config):
-                    for node_name, node_output in state_snapshot.items():
-                        if not isinstance(node_output, dict):
-                            continue
-
-                        new_sources = node_output.get("scraped_sources", [])
-                        if new_sources:
-                            accumulated_sources.extend(new_sources)
-
-                        for msg in node_output.get("progress_messages", []):
-                            if msg not in seen_messages:
-                                seen_messages.add(msg)
-                                yield {
-                                    "event": "progress",
-                                    "data": json.dumps({"message": msg}),
-                                }
-                                await asyncio.sleep(0)
-
-            # -------------------------------------------------------------- #
-            # PHASE 2: Stream the writer's output token by token              #
-            # -------------------------------------------------------------- #
-
-            yield {
-                "event": "progress",
-                "data": json.dumps({"message": "✍️ Writing report…"}),
-            }
-            await asyncio.sleep(0)
-
-            writer_state = AgentState(
-                topic=request.topic,
-                search_queries=[],
-                raw_search_results=[],
-                scraped_sources=accumulated_sources,
-                critic_feedback=None,
-                critic_passed=True,
-                report_sections=[],
-                final_report=None,
-                citations=[],
-                current_step="writer_agent",
-                step_count=0,
-                progress_messages=[],
-                error=None,
+            classify_prompt = (
+                "You are an expert intent classifier for Lumen, an AI Deep Research Assistant.\n"
+                "Your task is to classify the user's input topic/query into one of two categories:\n\n"
+                "1. \"CHITCHAT\" - Select this if the input is small talk, a greeting, simple conversation, general politeness, "
+                "or an out-of-scope discussion (e.g. \"hey\", \"how are you?\", \"tell me a joke\", \"what is your name?\", \"who created you?\").\n"
+                "2. \"RESEARCH_TOPIC\" - Select this if the input is a request for detailed research, investigation, search queries, "
+                "or compiling information on a specific subject.\n\n"
+                "Respond with EXACTLY one word: either \"CHITCHAT\" or \"RESEARCH_TOPIC\". Do not include any other text, explanation or punctuation."
             )
+
+            intent = "RESEARCH_TOPIC"
+            try:
+                intent_llm = ChatOllama(
+                    model="gemma4:31b-cloud",
+                    temperature=0.0,
+                )
+                classification_resp = await intent_llm.ainvoke([
+                    SystemMessage(content=classify_prompt),
+                    HumanMessage(content=request.topic)
+                ])
+                raw_intent = classification_resp.content.strip().upper()
+                if "CHITCHAT" in raw_intent:
+                    intent = "CHITCHAT"
+            except Exception as e:
+                # Fallback to research topic if Ollama has a transient error
+                logger.warning(f"Classification failed: {e}. Defaulting to RESEARCH_TOPIC.")
 
             final_report_tokens: list[str] = []
             final_citations: list = []
-            async for token, citations in stream_writer_agent(writer_state):
-                final_citations = citations
-                final_report_tokens.append(token)
+
+            if intent == "CHITCHAT":
                 yield {
-                    "event": "token",
-                    "data": json.dumps({"token": token}),
+                    "event": "progress",
+                    "data": json.dumps({"message": "💬 Responding..."}),
                 }
                 await asyncio.sleep(0)
+
+                chitchat_llm = ChatOllama(
+                    model="gemma4:31b-cloud",
+                    temperature=0.7,
+                )
+                chitchat_messages = [
+                    SystemMessage(content=(
+                        "You are Lumen, a polite AI Deep Research Assistant. Respond politely to the user's greeting or chitchat. "
+                        "Keep the tone friendly and professional. Mention that you are optimized for structured web research, "
+                        "and encourage them to ask a research query once they are ready. Keep your response brief (2-3 sentences)."
+                    )),
+                    HumanMessage(content=request.topic),
+                ]
+                async for chunk in chitchat_llm.astream(chitchat_messages):
+                    token = chunk.content
+                    if token:
+                        final_report_tokens.append(token)
+                        yield {
+                            "event": "token",
+                            "data": json.dumps({"token": token}),
+                        }
+                        await asyncio.sleep(0)
+            else:
+                # -------------------------------------------------------------- #
+                # PHASE 1: Run the LangGraph pipeline with checkpointing          #
+                # -------------------------------------------------------------- #
+                async with get_checkpointed_graph() as graph:
+                    async for state_snapshot in graph.astream(initial_state, config=langgraph_config):
+                        for node_name, node_output in state_snapshot.items():
+                            if not isinstance(node_output, dict):
+                                continue
+
+                            new_sources = node_output.get("scraped_sources", [])
+                            if new_sources:
+                                accumulated_sources.extend(new_sources)
+
+                            for msg in node_output.get("progress_messages", []):
+                                if msg not in seen_messages:
+                                    seen_messages.add(msg)
+                                    yield {
+                                        "event": "progress",
+                                        "data": json.dumps({"message": msg}),
+                                    }
+                                    await asyncio.sleep(0)
+
+                # -------------------------------------------------------------- #
+                # PHASE 2: Stream the writer's report output                     #
+                # -------------------------------------------------------------- #
+                yield {
+                    "event": "progress",
+                    "data": json.dumps({"message": "✍️ Writing report…"}),
+                }
+                await asyncio.sleep(0)
+
+                writer_state = AgentState(
+                    topic=request.topic,
+                    search_queries=[],
+                    raw_search_results=[],
+                    scraped_sources=accumulated_sources,
+                    critic_feedback=None,
+                    critic_passed=True,
+                    report_sections=[],
+                    final_report=None,
+                    citations=[],
+                    current_step="writer_agent",
+                    step_count=0,
+                    progress_messages=[],
+                    error=None,
+                )
+
+                async for token, citations in stream_writer_agent(writer_state):
+                    final_citations = citations
+                    final_report_tokens.append(token)
+                    yield {
+                        "event": "token",
+                        "data": json.dumps({"token": token}),
+                    }
+                    await asyncio.sleep(0)
 
             # -------------------------------------------------------------- #
             # Persist user + assistant messages to DB                         #

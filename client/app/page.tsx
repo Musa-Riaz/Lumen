@@ -4,7 +4,7 @@ import { Sidebar } from "@/components/chat/sidebar";
 import { MessageFeed } from "@/components/chat/message-feed";
 import { InputArea } from "@/components/chat/input-area";
 import { WelcomeSplash } from "@/components/chat/welcome-splash";
-import { useSessions, useMessages, Message } from "@/lib/hooks";
+import { useSessions, useMessages } from "@/lib/hooks";
 import { useEffect, useState, useRef } from "react";
 import { useUser } from "@clerk/nextjs";
 
@@ -15,6 +15,8 @@ export default function Home() {
     loading: sessionsLoading,
     fetchSessions,
     createSession,
+    renameSession,
+    deleteSession,
   } = useSessions();
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -260,7 +262,7 @@ export default function Home() {
   const renderedMessages = [...messages];
   if (currentPrompt) {
     renderedMessages.push({
-      id: "temp-user-msg-" + Date.now(),
+      id: "temp-prompt",
       session_id: activeSessionId || "",
       role: "user",
       content: currentPrompt,
@@ -277,6 +279,8 @@ export default function Home() {
         activeSessionId={activeSessionId}
         onSelectSession={handleSelectSession}
         onCreateSession={handleCreateSession}
+        onRenameSession={renameSession}
+        onDeleteSession={deleteSession}
         loading={sessionsLoading}
       />
 

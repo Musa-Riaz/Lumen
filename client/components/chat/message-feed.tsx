@@ -1,8 +1,9 @@
 "use client";
 
 import { Message } from "@/lib/hooks";
-import { Sparkle, User, Link as LinkIcon, CircleNotch } from "@phosphor-icons/react";
+import { Sparkle, Link as LinkIcon, CircleNotch } from "@phosphor-icons/react";
 import React, { useEffect, useRef, useState } from "react";
+import {useUser} from "@clerk/nextjs"
 import { cn } from "@/lib/utils";
 
 interface MessageFeedProps {
@@ -18,6 +19,7 @@ export function MessageFeed({
   isStreaming,
   streamingContent,
 }: MessageFeedProps) {
+  const { user } = useUser()
   const feedEndRef = useRef<HTMLDivElement>(null);
   const [showProgressLog, setShowProgressLog] = useState(true);
 
@@ -27,69 +29,103 @@ export function MessageFeed({
   }, [messages, streamingContent, progressMessages]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-8 space-y-6 md:px-8 max-w-4xl mx-auto w-full scrollbar-none">
-      {messages.map((m) => (
-        <div key={m.id} className="flex gap-4 items-start animate-fade-in">
-          {/* Avatar */}
+    <div className="flex-1 overflow-y-auto px-4 py-8 space-y-6 md:px-8 max-w-screen mx-auto w-full scrollbar-none">
+      {messages.map((m) => {
+        const isUser = m.role === "user";
+        return (
           <div
+            key={m.id}
             className={cn(
-              "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border shadow-sm select-none",
-              m.role === "user" ? "bg-accent border-accent text-foreground" : "bg-primary border-primary text-primary-foreground"
+              "flex gap-3 items-end animate-fade-in",
+              isUser ? "flex-row-reverse" : "flex-row"
             )}
           >
-            {m.role === "user" ? <User size={16} /> : <Sparkle size={16} weight="fill" />}
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 space-y-3 min-w-0">
-            <div className="font-semibold text-xs text-muted-foreground capitalize select-none">
-              {m.role === "user" ? "You" : "Lumen AI"}
+            {/* Avatar */}
+            <div
+              className={cn(
+                "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border shadow-sm select-none",
+                isUser
+                  ? "bg-accent border-accent text-foreground"
+                  : "bg-primary border-primary text-primary-foreground"
+              )}
+            >
+              {isUser ? 
+              <img
+              src={user?.imageUrl || ''}
+              alt=""
+              className="w-8 h-8 object-cover rounded-lg"
+              />
+              : <Sparkle size={16} weight="fill" />}
             </div>
-            <div className="text-xs leading-relaxed text-foreground/90 space-y-3">
-              {renderMarkdown(m.content)}
-            </div>
 
-            {/* Citations / Sources */}
-            {m.role === "assistant" && m.citations && m.citations.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border/60">
-                <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block mb-2 select-none">
-                  Sources & Citations
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  {m.citations.map((c, idx) => (
-                    <a
-                      key={idx}
-                      href={c.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-muted/20 text-[10px] font-mono text-muted-foreground hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all select-none"
-                    >
-                      <LinkIcon size={12} />
-                      <span className="max-w-37.5 truncate">{c.title || c.url}</span>
-                      <span className="text-[9px] text-muted-foreground/50">[{idx + 1}]</span>
-                    </a>
-                  ))}
-                </div>
+            {/* Bubble */}
+            <div
+              className={cn(
+                "flex flex-col gap-2 max-w-[80%]",
+                isUser ? "items-end" : "items-start"
+              )}
+            >
+              <span className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider select-none px-1">
+                {isUser ? "You" : "Lumen AI"}
+              </span>
+
+              <div
+                className={cn(
+                  "rounded-2xl px-4 py-3 text-xs leading-relaxed space-y-2",
+                  isUser
+                    ? "bg-primary text-primary-foreground rounded-br-sm"
+                    : "bg-muted/40 border text-foreground/90 rounded-bl-sm"
+                )}
+              >
+                {isUser ? (
+                  <p>{m.content}</p>
+                ) : (
+                  renderMarkdown(m.content)
+                )}
               </div>
-            )}
+
+              {/* Citations / Sources — only for AI messages */}
+              {!isUser && m.citations && m.citations.length > 0 && (
+                <div className="mt-1 px-1">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block mb-2 select-none">
+                    Sources &amp; Citations
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {m.citations.map((c, idx) => (
+                      <a
+                        key={idx}
+                        href={c.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-muted/20 text-[10px] font-mono text-muted-foreground hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all select-none"
+                      >
+                        <LinkIcon size={12} />
+                        <span className="max-w-37.5 truncate">{c.title || c.url}</span>
+                        <span className="text-[9px] text-muted-foreground/50">[{idx + 1}]</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* Streaming / Active Message */}
       {isStreaming && (
-        <div className="space-y-6">
-          {/* Main output element */}
+        <div className="space-y-4">
+          {/* Active streaming bubble — left aligned like AI */}
           {streamingContent && (
-            <div className="flex gap-4 items-start animate-fade-in">
+            <div className="flex gap-3 items-end animate-fade-in flex-row">
               <div className="w-8 h-8 rounded-lg bg-primary border border-primary text-primary-foreground flex items-center justify-center shrink-0 shadow-sm select-none">
                 <Sparkle size={16} weight="fill" />
               </div>
-              <div className="flex-1 space-y-3 min-w-0">
-                <div className="font-semibold text-xs text-muted-foreground select-none">
-                  Lumen AI (Streaming...)
-                </div>
-                <div className="text-xs leading-relaxed text-foreground/90 space-y-3">
+              <div className="flex flex-col gap-2 max-w-[80%] items-start">
+                <span className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider select-none px-1">
+                  Lumen AI
+                </span>
+                <div className="bg-muted/40 border rounded-2xl rounded-bl-sm px-4 py-3 text-xs leading-relaxed space-y-2 text-foreground/90">
                   {renderMarkdown(streamingContent)}
                 </div>
               </div>
@@ -98,7 +134,7 @@ export function MessageFeed({
 
           {/* Agent execution log / progress box */}
           {progressMessages.length > 0 && (
-            <div className="flex gap-4 items-start animate-fade-in pl-12">
+            <div className={cn("flex gap-3 items-start", streamingContent ? "pl-11" : "")}>
               <div className="flex-1 bg-muted/30 border rounded-xl overflow-hidden shadow-sm">
                 <button
                   onClick={() => setShowProgressLog(!showProgressLog)}
@@ -155,7 +191,6 @@ function renderMarkdown(text: string): React.ReactNode[] {
   return parts.map((part, idx) => {
     if (part.startsWith("```") && part.endsWith("```")) {
       const content = part.slice(3, -3);
-      // Strip potential language specifier off first line
       const firstNewline = content.indexOf("\n");
       let code = content;
       let lang = "";
@@ -177,14 +212,12 @@ function renderMarkdown(text: string): React.ReactNode[] {
       );
     }
 
-    // Inside normal blocks, process inline markers line by line
     const lines = part.split("\n");
     return (
       <div key={idx} className="space-y-2">
         {lines.map((line, lIdx) => {
           const trimmed = line.trim();
 
-          // Headers
           if (trimmed.startsWith("### ")) {
             return (
               <h3 key={lIdx} className="text-sm font-bold text-foreground mt-4 mb-2">
@@ -207,7 +240,6 @@ function renderMarkdown(text: string): React.ReactNode[] {
             );
           }
 
-          // Bullet points
           if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
             return (
               <ul key={lIdx} className="list-disc pl-4 space-y-1">
@@ -216,7 +248,6 @@ function renderMarkdown(text: string): React.ReactNode[] {
             );
           }
 
-          // Numbered bullet points (e.g. "1. ")
           const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
           if (numMatch) {
             return (
@@ -226,7 +257,6 @@ function renderMarkdown(text: string): React.ReactNode[] {
             );
           }
 
-          // Paragraph or empty line
           return trimmed ? (
             <p key={lIdx} className="text-xs leading-relaxed mt-1">
               {parseInline(line)}
@@ -240,9 +270,7 @@ function renderMarkdown(text: string): React.ReactNode[] {
   });
 }
 
-// Custom inline parser for bold, italics, and inline code blocks
 function parseInline(inlineText: string): React.ReactNode[] {
-  // Regex to split on bold (**), italic (*), and inline code (`)
   const tokens = inlineText.split(/(\*\*.*?\*\*|`.*?`|\*.*?\*)/g);
 
   return tokens.map((token, index) => {

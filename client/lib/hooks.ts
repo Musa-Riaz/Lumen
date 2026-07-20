@@ -68,7 +68,44 @@ export function useSessions() {
     [fetchSessions]
   );
 
-  return { sessions, loading, error, fetchSessions, createSession };
+  const renameSession = useCallback(
+    async (id: string, title: string): Promise<boolean> => {
+      try {
+        const res = await fetch(`/api/sessions/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        // Update local state directly to avoid a full refetch
+        setSessions((prev) =>
+          prev.map((s) => (s.id === id ? { ...s, title } : s))
+        );
+        return true;
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to rename session");
+        return false;
+      }
+    },
+    []
+  );
+
+  const deleteSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      try {
+        const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        setSessions((prev) => prev.filter((s) => s.id !== id));
+        return true;
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to delete session");
+        return false;
+      }
+    },
+    []
+  );
+
+  return { sessions, loading, error, fetchSessions, createSession, renameSession, deleteSession };
 }
 
 // ---------------------------------------------------------------------------

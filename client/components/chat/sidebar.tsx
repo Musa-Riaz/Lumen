@@ -1,17 +1,19 @@
 "use client";
 
 import { useUser, UserButton } from "@clerk/nextjs";
-import { Plus, Chat, Sun, Moon, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { Plus, Chat, Sun, Moon, CaretLeft, CaretRight, PencilSimple, Trash } from "@phosphor-icons/react";
 import { useTheme } from "@/components/theme-provider";
 import { Session } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface SidebarProps {
   sessions: Session[];
   activeSessionId: string | null;
   onSelectSession: (id: string | null) => void;
   onCreateSession: () => void;
+  onRenameSession: (id: string, title: string) => Promise<boolean>;
+  onDeleteSession: (id: string) => Promise<boolean>;
   loading: boolean;
 }
 
@@ -20,11 +22,54 @@ export function Sidebar({
   activeSessionId,
   onSelectSession,
   onCreateSession,
+  onRenameSession,
+  onDeleteSession,
   loading,
 }: SidebarProps) {
   const { user } = useUser();
   const { theme, toggleTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
+
+  // Inline rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (renamingId && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [renamingId]);
+
+  const startRename = (id: string, currentTitle: string | null) => {
+    setRenamingId(id);
+    setRenameValue(currentTitle || "");
+  };
+
+  const commitRename = async () => {
+    if (!renamingId) return;
+    const trimmed = renameValue.trim();
+    if (trimmed) {
+      await onRenameSession(renamingId, trimmed);
+    }
+    setRenamingId(null);
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") commitRename();
+    if (e.key === "Escape") setRenamingId(null);
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm("Delete this session and all its messages?")) return;
+    await onDeleteSession(id);
+    // If the deleted session was active, clear the active session
+    if (activeSessionId === id) {
+      onSelectSession(null);
+    }
+  };
 
   return (
     <aside
@@ -80,7 +125,7 @@ export function Sidebar({
       </div>
 
       {/* Session List */}
-      <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+      <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
         {loading && (
           <div className="p-4 text-center text-xs text-muted-foreground">
             {!collapsed && "Loading sessions..."}
@@ -94,26 +139,69 @@ export function Sidebar({
         {!loading &&
           sessions.map((session) => {
             const isActive = session.id === activeSessionId;
+            const isRenaming = renamingId === session.id;
+
             return (
-              <button
+              <div
                 key={session.id}
-                onClick={() => onSelectSession(session.id)}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-xs transition-all duration-150 group cursor-pointer",
+                  "group relative flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs transition-all duration-150",
                   isActive
                     ? "bg-accent text-accent-foreground font-medium shadow-sm"
                     : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
                   collapsed && "justify-center px-0 w-10 mx-auto"
                 )}
-                title={session.title || "Unnamed research"}
               >
-                <Chat size={16} weight={isActive ? "fill" : "regular"} className="shrink-0" />
-                {!collapsed && (
-                  <span className="truncate pr-2 select-none flex-1">
-                    {session.title || "Untitled Research"}
-                  </span>
+                {/* Session Button / Icon */}
+                <button
+                  onClick={() => onSelectSession(session.id)}
+                  className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer text-left"
+                  title={session.title || "Unnamed research"}
+                >
+                  <Chat size={16} weight={isActive ? "fill" : "regular"} className="shrink-0" />
+                  {!collapsed && !isRenaming && (
+                    <span className="truncate select-none flex-1">
+                      {session.title || "Untitled Research"}
+                    </span>
+                  )}
+                </button>
+
+                {/* Inline Rename Input */}
+                {!collapsed && isRenaming && (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={handleRenameKeyDown}
+                    className="flex-1 text-xs bg-background border border-primary/40 rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-0"
+                    onClick={(e) => e.stopPropagation()}
+                  />
                 )}
-              </button>
+
+                {/* Action Buttons (shown on hover when not collapsed or renaming) */}
+                {!collapsed && !isRenaming && (
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(session.id, session.title);
+                      }}
+                      className="p-1 rounded-md hover:bg-background/60 text-muted-foreground hover:text-foreground cursor-pointer"
+                      title="Rename session"
+                    >
+                      <PencilSimple size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => handleDelete(e, session.id)}
+                      className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive cursor-pointer"
+                      title="Delete session"
+                    >
+                      <Trash size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
       </div>
