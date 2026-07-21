@@ -1,14 +1,18 @@
 from loguru import logger
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from graph.state import AgentState
 from schemas.report import CriticVerdict
 from agents.prompts import CRITIC_PROMPT
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
-llm = ChatOllama(
-    model="gemma4:31b-cloud",
-    temperature=0
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0,
+    api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 def critic_agent(state: AgentState) -> dict:

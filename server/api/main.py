@@ -17,7 +17,7 @@ from graph.state import AgentState
 from graph.graph import get_checkpointed_graph
 from agents.writer_agent import stream_writer_agent
 from api.db import open_pool, close_pool, get_conn, init_db
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
@@ -284,9 +284,10 @@ async def stream_research(
 
             intent = "RESEARCH_TOPIC"
             try:
-                intent_llm = ChatOllama(
-                    model="gemma4:31b-cloud",
+                intent_llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
                     temperature=0.0,
+                    api_key=os.getenv("GOOGLE_API_KEY")
                 )
                 classification_resp = await intent_llm.ainvoke([
                     SystemMessage(content=classify_prompt),
@@ -309,9 +310,10 @@ async def stream_research(
                 }
                 await asyncio.sleep(0)
 
-                chitchat_llm = ChatOllama(
-                    model="gemma4:31b-cloud",
+                chitchat_llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
                     temperature=0.7,
+                    api_key=os.getenv("GOOGLE_API_KEY")
                 )
                 chitchat_messages = [
                     SystemMessage(content=(

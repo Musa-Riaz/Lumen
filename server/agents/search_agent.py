@@ -1,14 +1,19 @@
 from loguru import logger
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from graph.state import AgentState
 from schemas.report import SearchPlan
 from tools.search import search_web
 from agents.prompts import SEARCH_AGENT_PROMPT
+from dotenv import load_dotenv
+import os
 
-llm = ChatOllama(
-    model="gemma4:31b-cloud",
-    temperature=0
+load_dotenv()
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0,
+    api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 """Generates smart search queries, then runs them using the Tavily tool."""

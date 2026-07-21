@@ -1,9 +1,13 @@
 from loguru import logger
 from typing import AsyncGenerator, Tuple
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from graph.state import AgentState
 from agents.prompts import WRITER_PROMPT, STREAMING_WRITER_PROMPT
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------
@@ -11,10 +15,11 @@ from agents.prompts import WRITER_PROMPT, STREAMING_WRITER_PROMPT
 # but NO longer called from the graph. The streaming version below is used
 # by the SSE endpoint instead so the user can see tokens arrive in real time.
 # ---------------------------------------------------------------------------
-llm = ChatOllama(
-    model="gemma4:31b-cloud",
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
     temperature=0.4,
-    max_tokens=8192
+    max_tokens=8192,
+    api_key=os.getenv("GOOGLE_API_KEY")
 )
 
 
@@ -81,9 +86,10 @@ async def stream_writer_agent(
     formatted_sources = _build_formatted_sources(sources)
 
     # Streaming LLM — no structured output so `.astream()` works
-    streaming_llm = ChatOllama(
-        model="gemma4:31b-cloud",
+    streaming_llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
         temperature=0.4,
+        api_key=os.getenv("GOOGLE_API_KEY")
         # No max_tokens cap here so the full report can be written
     )
 
