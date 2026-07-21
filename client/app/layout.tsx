@@ -5,6 +5,7 @@ import "./globals.css";
 import { cn } from "@/lib/utils";
 import { SyncUserClient } from "@/components/sync-user-client";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner"
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -48,6 +49,7 @@ export default function RootLayout({
           <ThemeProvider>
             <SyncUserClient />
             {children}
+            <Toaster />
           </ThemeProvider>
         </ClerkProvider>
       </body>

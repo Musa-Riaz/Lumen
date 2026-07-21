@@ -23,10 +23,10 @@ export function MessageFeed({
   const feedEndRef = useRef<HTMLDivElement>(null);
   const [showProgressLog, setShowProgressLog] = useState(true);
 
-  // Auto-scroll to bottom on new messages or streaming updates
-  useEffect(() => {
-    feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent, progressMessages]);
+  // // Auto-scroll to bottom on new messages or streaming updates
+  // useEffect(() => {
+  //   feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // }, [messages, streamingContent, progressMessages]);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-8 space-y-6 md:px-8 max-w-screen mx-auto w-full scrollbar-none">

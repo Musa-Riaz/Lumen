@@ -32,10 +32,24 @@ async def open_pool() -> None:
             "Neither NEON_DATABASE_POOLING_URL nor NEON_DATABASE_URL is set."
         )
 
+    # Neon drops idle connections after ~5 min.
+    # keepalives_idle=60  → send TCP keepalive after 60 s of silence
+    # keepalives_interval=10 → retry every 10 s
+    # keepalives_count=5  → give up after 5 failures
+    # connect_timeout=10  → fail fast rather than hanging
     _pool = AsyncConnectionPool(
         conninfo=db_url,
         min_size=1,
         max_size=10,
+        max_idle=240,           # recycle connections idle > 4 min (before Neon kills them)
+        reconnect_timeout=5,    # auto-reconnect on broken connections
+        kwargs={
+            "keepalives": 1,
+            "keepalives_idle": 60,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+            "connect_timeout": 10,
+        },
         open=False,
     )
     await _pool.open()
@@ -57,9 +71,22 @@ def get_pool() -> AsyncConnectionPool:
 
 @asynccontextmanager
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
-    """Async context manager that yields a connection from the pool."""
-    async with get_pool().connection() as conn:
-        yield conn
+    """Async context manager that yields a connection from the pool.
+
+    Retries once if an OperationalError is raised (e.g. SSL EOF on a stale
+    connection that Neon dropped) so the caller gets a fresh connection
+    instead of a 500 error.
+    """
+    pool = get_pool()
+    try:
+        async with pool.connection() as conn:
+            yield conn
+    except psycopg.OperationalError:
+        # The connection was closed by the server (SSL EOF / idle timeout).
+        # Check the pool for bad connections and try once more.
+        await pool.check()
+        async with pool.connection() as conn:
+            yield conn
 
 
 # ---------------------------------------------------------------------------
