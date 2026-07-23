@@ -38,9 +38,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Lumen API", lifespan=lifespan)
 
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
