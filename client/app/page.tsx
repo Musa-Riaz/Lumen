@@ -20,7 +20,7 @@ export default function Home() {
   } = useSessions();
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const { messages, fetchMessages } = useMessages(activeSessionId);
+  const { messages, loading: messagesLoading, fetchMessages } = useMessages(activeSessionId);
 
   // Local state during streaming
   const [isStreaming, setIsStreaming] = useState(false);
@@ -134,7 +134,7 @@ export default function Home() {
 
     setIsStreaming(true);
     setStreamingContent("");
-    setProgressMessages([]);
+    setProgressMessages(["Initializing research process..."]);
     setCurrentPrompt(text);
     setInputVal(""); // Reset input box
 
@@ -162,6 +162,7 @@ export default function Home() {
     try {
       // 3. Create a session in DB first if none is active
       if (!sessionId) {
+        setProgressMessages((prev) => [...prev, "Setting up chat session..."]);
         const createdId = await createSession(
           text.slice(0, 50) + "...",
           text
@@ -301,11 +302,12 @@ export default function Home() {
         </div>
 
         {/* Messaging Board OR Welcome suggestions */}
-        {renderedMessages.length === 0 && !isStreaming ? (
+        {renderedMessages.length === 0 && !isStreaming && !messagesLoading ? (
           <WelcomeSplash onSelectSuggestion={handleSelectSuggestion} />
         ) : (
           <MessageFeed
             messages={renderedMessages}
+            messagesLoading={messagesLoading}
             progressMessages={progressMessages}
             isStreaming={isStreaming}
             streamingContent={streamingContent}

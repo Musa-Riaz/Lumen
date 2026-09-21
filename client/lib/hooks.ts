@@ -29,16 +29,23 @@ export interface Message {
 
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSessions = useCallback(async () => {
+  const fetchSessions = useCallback(async (retryCount = 0) => {
     await Promise.resolve(); // yields to microtasks loop (avoids sync setState in effects)
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/sessions");
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        if (res.status === 401 && retryCount < 3) {
+          // Retry if Clerk session wasn't fully ready on page refresh
+          setTimeout(() => fetchSessions(retryCount + 1), 600);
+          return;
+        }
+        throw new Error(await res.text());
+      }
       const data = await res.json();
       setSessions(data.sessions ?? []);
     } catch (err: unknown) {
@@ -117,31 +124,39 @@ export function useMessages(sessionId: string | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMessages = useCallback(async (overrideSessionId?: string) => {
-    await Promise.resolve(); // yields to microtasks loop (avoids sync setState in effects)
-    const id = overrideSessionId || sessionId;
-    if (!id) {
-      setMessages([]);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/sessions/${id}/messages`);
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setMessages(data.messages ?? []);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId]);
+  const fetchMessages = useCallback(
+    async (overrideSessionId?: string) => {
+      await Promise.resolve(); // yields to microtasks loop (avoids sync setState in effects)
+      const id = overrideSessionId || sessionId;
+      if (!id) {
+        setMessages([]);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/sessions/${id}/messages`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        setMessages(data.messages ?? []);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to load messages");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [sessionId]
+  );
 
   // Hook side-effect auto-triggers fetch on session ID changes
   useEffect(() => {
+    if (sessionId) {
+      setMessages([]);
+      setLoading(true);
+    }
     fetchMessages();
-  }, [fetchMessages]);
+  }, [sessionId, fetchMessages]);
 
   return { messages, loading, error, fetchMessages };
 }

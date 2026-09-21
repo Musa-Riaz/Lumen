@@ -1,13 +1,15 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-const isPublicRoute = createRouteMatcher([
-  "/sign-in(.*)",
-  "/sign-up(.*)",
-  "/api/auth/(.*)", // Allow auth sync from server side
-]);
+const isPublicRoute = (pathname: string) => {
+  return (
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/sign-up") ||
+    pathname.startsWith("/api/auth")
+  );
+};
 
 export default clerkMiddleware(async (auth, request) => {
-  if (!isPublicRoute(request)) {
+  if (!isPublicRoute(request.nextUrl.pathname)) {
     await auth.protect();
   }
 });
@@ -20,3 +22,4 @@ export const config = {
     "/(api|trpc)(.*)",
   ],
 };
+

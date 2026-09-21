@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 interface MessageFeedProps {
   messages: Message[];
+  messagesLoading?: boolean;
   progressMessages: string[];
   isStreaming: boolean;
   streamingContent: string;
@@ -15,22 +16,61 @@ interface MessageFeedProps {
 
 export function MessageFeed({
   messages,
+  messagesLoading,
   progressMessages,
   isStreaming,
   streamingContent,
 }: MessageFeedProps) {
   const { user } = useUser()
   const feedEndRef = useRef<HTMLDivElement>(null);
-  const [showProgressLog, setShowProgressLog] = useState(true);
+  // Auto-scroll to bottom on new messages or streaming updates
+  useEffect(() => {
+    feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingContent, progressMessages, isStreaming, messagesLoading]);
 
-  // // Auto-scroll to bottom on new messages or streaming updates
-  // useEffect(() => {
-  //   feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  // }, [messages, streamingContent, progressMessages]);
+  const latestProgressMessage =
+    progressMessages.length > 0
+      ? progressMessages[progressMessages.length - 1]
+      : "Initializing research pipeline...";
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-8 space-y-6 md:px-8 max-w-screen mx-auto w-full scrollbar-none">
-      {messages.map((m) => {
+      {messagesLoading && (
+        <div className="space-y-6 animate-fade-in py-2">
+          {/* User message skeleton */}
+          <div className="flex gap-3 items-end flex-row-reverse">
+            <div className="w-8 h-8 rounded-lg bg-accent/40 animate-pulse shrink-0" />
+            <div className="flex flex-col gap-2 max-w-[60%] items-end">
+              <div className="h-2.5 w-10 bg-muted-foreground/20 rounded animate-pulse" />
+              <div className="rounded-2xl rounded-br-sm px-4 py-3 bg-muted/30 border w-56 h-10 animate-pulse" />
+            </div>
+          </div>
+
+          {/* AI message skeleton */}
+          <div className="flex gap-3 items-end flex-row">
+            <div className="w-8 h-8 rounded-lg bg-primary/20 animate-pulse shrink-0" />
+            <div className="flex flex-col gap-2 max-w-[80%] items-start w-full">
+              <div className="h-2.5 w-14 bg-muted-foreground/20 rounded animate-pulse" />
+              <div className="rounded-2xl rounded-bl-sm p-4 bg-muted/30 border w-full space-y-2.5 animate-pulse">
+                <div className="h-3 bg-muted-foreground/20 rounded w-5/6" />
+                <div className="h-3 bg-muted-foreground/20 rounded w-3/4" />
+                <div className="h-3 bg-muted-foreground/20 rounded w-1/2" />
+              </div>
+            </div>
+          </div>
+
+          {/* Second User message skeleton */}
+          <div className="flex gap-3 items-end flex-row-reverse">
+            <div className="w-8 h-8 rounded-lg bg-accent/40 animate-pulse shrink-0" />
+            <div className="flex flex-col gap-2 max-w-[60%] items-end">
+              <div className="h-2.5 w-10 bg-muted-foreground/20 rounded animate-pulse" />
+              <div className="rounded-2xl rounded-br-sm px-4 py-3 bg-muted/30 border w-40 h-10 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!messagesLoading && messages.map((m) => {
         const isUser = m.role === "user";
         return (
           <div
@@ -132,40 +172,19 @@ export function MessageFeed({
             </div>
           )}
 
-          {/* Agent execution log / progress box */}
-          {progressMessages.length > 0 && (
-            <div className={cn("flex gap-3 items-start", streamingContent ? "pl-11" : "")}>
-              <div className="flex-1 bg-muted/30 border rounded-xl overflow-hidden shadow-sm">
-                <button
-                  onClick={() => setShowProgressLog(!showProgressLog)}
-                  className="w-full flex items-center justify-between px-4 py-2.5 bg-muted/65 border-b text-[10px] font-bold text-muted-foreground uppercase tracking-widest cursor-pointer select-none"
-                >
-                  <div className="flex items-center gap-2">
-                    <CircleNotch size={12} className="animate-spin text-primary" />
-                    <span>Agent Research Process</span>
-                  </div>
-                  <span className="text-[9px] lowercase font-normal">
-                    {showProgressLog ? "Click to collapse" : "Click to expand"}
-                  </span>
-                </button>
-                {showProgressLog && (
-                  <div className="p-3 space-y-1.5 max-h-48 overflow-y-auto">
-                    {progressMessages.map((msg, idx) => (
-                      <div
-                        key={idx}
-                        className={cn(
-                          "text-[10px] font-mono leading-relaxed transition-all",
-                          idx === progressMessages.length - 1
-                            ? "text-primary font-semibold animate-pulse"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        <span className="text-primary-foreground/30 mr-1.5 select-none">&gt;</span>
-                        {msg}
-                      </div>
-                    ))}
-                  </div>
-                )}
+          {/* Agent execution progress: sleek spinner displaying dynamic status message */}
+          {(!streamingContent || isStreaming) && (
+            <div className="flex gap-3 items-center animate-fade-in flex-row py-1">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0 shadow-sm select-none">
+                <CircleNotch size={18} className="animate-spin text-primary" />
+              </div>
+              <div className="flex flex-col gap-0.5 max-w-[80%]">
+                <span className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider select-none">
+                  Lumen Agent
+                </span>
+                <p className="text-xs font-mono text-foreground/80 font-medium animate-pulse transition-all">
+                  {latestProgressMessage}
+                </p>
               </div>
             </div>
           )}

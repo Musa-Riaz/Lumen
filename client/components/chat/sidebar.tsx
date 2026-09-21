@@ -210,8 +210,21 @@ export function Sidebar({
         {/* Session List */}
         <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
           {loading && (
-            <div className="p-4 text-center text-xs text-muted-foreground">
-              {!collapsed && "Loading sessions..."}
+            <div className="space-y-1 py-1">
+              {[1, 2, 3, 4].map((i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-muted/30 animate-pulse",
+                    collapsed && "justify-center px-0 w-10 mx-auto"
+                  )}
+                >
+                  <div className="w-4 h-4 rounded-md bg-muted-foreground/20 shrink-0" />
+                  {!collapsed && (
+                    <div className="h-3 bg-muted-foreground/20 rounded-md flex-1" />
+                  )}
+                </div>
+              ))}
             </div>
           )}
           {!loading && sessions.length === 0 && (
